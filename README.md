@@ -26,7 +26,16 @@ Scenario:
 
 Debug with VecTrace:
 
+```python
+# 1) Run retrieval and capture vector IDs from the retriever output.
+hits = qdrant_client.query_points(collection_name="support_kb", query=query_vector, limit=5)
+for rank, point in enumerate(hits.points, start=1):
+    print("rank=", rank, "vector_id=", point.id, "score=", point.score)
+# Example top hit: vec_101
+```
+
 ```bash
+# 2) Pass that retrieved vector ID to VecTrace.
 vectrace trace --vector-id vec_101 --collection support_kb --db ./vectrace.db
 ```
 
@@ -35,6 +44,8 @@ Example outcome:
 - `chunk.preview = "...refunds allowed after 90 days..."`
 
 Result: you fix retrieval/index data instead of guessing at prompt changes.
+
+If you only know question + answer, re-run retrieval for that question to recover vector IDs, then trace.
 
 ## Report Screenshot
 
@@ -180,6 +191,10 @@ raglens explain --query "Can I get a refund after 90 days?" --top-k 5
 vectrace trace --vector-id vec_101 --collection support_kb --db ./vectrace.db
 vectrace report --vector-id vec_101 --collection support_kb --db ./vectrace.db --output ./trace-vec_101.html
 ```
+
+Important:
+- `vectrace trace` needs a vector ID from retrieval output (`point.id` from your retriever/Qdrant response).
+- If IDs were not logged originally, re-run retrieval with the same query and use returned top IDs.
 
 ## Qdrant Integration
 
