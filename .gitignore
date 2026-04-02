@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+.venv/
+vectrace.db
+lineage.html
+dist/
+build/
+*.egg-info/
+demo/*.gif

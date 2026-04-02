@@ -1,0 +1,247 @@
+from __future__ import annotations
+
+import sqlite3
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from lineage.query import AmbiguousVectorIDError, LineageQuery
+from lineage.tracker import LineageTracker
+
+
+class TrackerQueryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = str(Path(self.tmp.name) / "vectrace.db")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_record_and_query_lineage(self) -> None:
+        with LineageTracker(self.db_path, autoinit=True) as tracker:
+            tracker.start_pipeline("unit_test")
+            tracker.record_document(
+                doc_id="doc_1",
+                source_path="s3://bucket/doc.pdf",
+                source_type="s3",
+                version="v1",
+            )
+            tracker.record_chunk(
+                chunk_id="doc_1:chunk:0",
+                document_id="doc_1",
+                chunk_index=0,
+                strategy="semantic",
+                chunk_size=21,
+                text_preview="refund for broken item",
+            )
+            tracker.record_vector(
+                vector_id="0",
+                collection_name="support_kb",
+                chunk_id="doc_1:chunk:0",
+                embedding_model="text-embedding-3-small",
+                model_version="2024-06-01",
+            )
+            tracker.complete_pipeline("success")
+
+        with LineageQuery(self.db_path) as query:
+            lineage = query.get_lineage("0", "support_kb")
+
+        self.assertIsNotNone(lineage)
+        if lineage is None:
+            return
+        self.assertEqual(lineage["vector"]["id"], "0")
+        self.assertEqual(lineage["vector"]["collection_name"], "support_kb")
+        self.assertEqual(lineage["chunk"]["id"], "doc_1:chunk:0")
+        self.assertEqual(lineage["document"]["id"], "doc_1")
+
+    def test_ambiguous_vector_id_requires_collection(self) -> None:
+        with LineageTracker(self.db_path, autoinit=True) as tracker:
+            tracker.start_pipeline("unit_test")
+            tracker.record_document(
+                doc_id="doc_1",
+                source_path="/tmp/doc.txt",
+                source_type="local",
+                version="v1",
+            )
+            tracker.record_chunk(
+                chunk_id="doc_1:chunk:0",
+                document_id="doc_1",
+                chunk_index=0,
+                strategy="fixed-size",
+                chunk_size=3,
+                text_preview="abc",
+            )
+            tracker.record_vector(
+                vector_id="same-id",
+                collection_name="collection_a",
+                chunk_id="doc_1:chunk:0",
+                embedding_model="model_a",
+            )
+            tracker.record_vector(
+                vector_id="same-id",
+                collection_name="collection_b",
+                chunk_id="doc_1:chunk:0",
+                embedding_model="model_b",
+            )
+            tracker.complete_pipeline("success")
+
+        with LineageQuery(self.db_path) as query:
+            with self.assertRaises(AmbiguousVectorIDError):
+                query.get_lineage("same-id")
+
+    def test_foreign_keys_enforced(self) -> None:
+        with LineageTracker(self.db_path, autoinit=True) as tracker:
+            with self.assertRaises(sqlite3.IntegrityError):
+                tracker.record_vector(
+                    vector_id="v1",
+                    collection_name="support_kb",
+                    chunk_id="missing_chunk",
+                    embedding_model="model_x",
+                )
+
+    def test_batch_id_rotates_per_pipeline_run(self) -> None:
+        with LineageTracker(self.db_path, autoinit=True) as tracker:
+            tracker.start_pipeline("run_a")
+            batch_a = tracker.batch_id
+            tracker.complete_pipeline("success")
+
+            tracker.start_pipeline("run_b")
+            batch_b = tracker.batch_id
+            tracker.complete_pipeline("success")
+
+        self.assertNotEqual(batch_a, batch_b)
+
+    def test_start_pipeline_rejects_overlapping_run(self) -> None:
+        with LineageTracker(self.db_path, autoinit=True) as tracker:
+            tracker.start_pipeline("run_a")
+            with self.assertRaises(RuntimeError):
+                tracker.start_pipeline("run_b")
+
+    def test_context_manager_marks_run_failed_on_exception(self) -> None:
+        with self.assertRaises(RuntimeError):
+            with LineageTracker(self.db_path, autoinit=True) as tracker:
+                run_id = tracker.start_pipeline("run_will_fail")
+                self.assertIsNotNone(run_id)
+                raise RuntimeError("boom")
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT status, completed_at FROM pipeline_runs WHERE name = ?",
+                ("run_will_fail",),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertIsNotNone(row)
+        if row is None:
+            return
+        self.assertEqual(row[0], "failed")
+        self.assertIsNotNone(row[1])
+
+    def test_record_vector_upsert_updates_created_timestamp(self) -> None:
+        with LineageTracker(self.db_path, autoinit=True) as tracker:
+            tracker.start_pipeline("upsert_timestamp")
+            tracker.record_document(
+                doc_id="doc_upsert",
+                source_path="/tmp/doc-upsert.txt",
+                source_type="local",
+                version="v1",
+            )
+            tracker.record_chunk(
+                chunk_id="doc_upsert:chunk:0",
+                document_id="doc_upsert",
+                chunk_index=0,
+                strategy="semantic",
+                chunk_size=12,
+                text_preview="first chunk",
+            )
+
+            with patch("lineage.tracker._utc_now_iso", return_value="2026-04-01T00:00:00+00:00"):
+                tracker.record_vector(
+                    vector_id="v_upsert",
+                    collection_name="support_kb",
+                    chunk_id="doc_upsert:chunk:0",
+                    embedding_model="model_v1",
+                    model_version="1",
+                )
+
+            with patch("lineage.tracker._utc_now_iso", return_value="2026-04-01T00:00:05+00:00"):
+                tracker.record_vector(
+                    vector_id="v_upsert",
+                    collection_name="support_kb",
+                    chunk_id="doc_upsert:chunk:0",
+                    embedding_model="model_v2",
+                    model_version="2",
+                )
+            tracker.complete_pipeline("success")
+
+        with LineageQuery(self.db_path) as query:
+            lineage = query.get_lineage("v_upsert", "support_kb")
+        self.assertIsNotNone(lineage)
+        if lineage is None:
+            return
+        self.assertEqual(lineage["vector"]["embedding_model"], "model_v2")
+        self.assertEqual(lineage["vector"]["model_version"], "2")
+        self.assertEqual(lineage["vector"]["created_at"], "2026-04-01T00:00:05+00:00")
+
+    def test_get_latest_retrieval_event_for_vector(self) -> None:
+        with LineageTracker(self.db_path, autoinit=True) as tracker:
+            tracker.start_pipeline("retrieval_lookup")
+            tracker.record_document(
+                doc_id="doc_ret",
+                source_path="/tmp/doc_ret.txt",
+                source_type="local",
+                version="v1",
+            )
+            tracker.record_chunk(
+                chunk_id="doc_ret:chunk:0",
+                document_id="doc_ret",
+                chunk_index=0,
+                strategy="semantic",
+                chunk_size=9,
+                text_preview="ret chunk",
+            )
+            tracker.record_vector(
+                vector_id="ret_v",
+                collection_name="support_kb",
+                chunk_id="doc_ret:chunk:0",
+                embedding_model="m1",
+            )
+            tracker.record_retrieval_event(
+                query_id="query_a",
+                query_text="first query",
+                final_answer="a1",
+                collection_name="support_kb",
+                vector_id="ret_v",
+                rank=2,
+                score=0.3,
+                metadata_json='{"k":"v1"}',
+                event_id="event_a",
+            )
+            tracker.record_retrieval_event(
+                query_id="query_b",
+                query_text="latest query",
+                final_answer="a2",
+                collection_name="support_kb",
+                vector_id="ret_v",
+                rank=1,
+                score=0.9,
+                metadata_json='{"k":"v2"}',
+                event_id="event_b",
+            )
+            tracker.complete_pipeline("success")
+
+        with LineageQuery(self.db_path) as query:
+            event = query.get_latest_retrieval_event("ret_v", "support_kb")
+        self.assertIsNotNone(event)
+        if event is None:
+            return
+        self.assertEqual(event["id"], "event_b")
+        self.assertEqual(event["query_text"], "latest query")
+        self.assertEqual(event["metadata"]["k"], "v2")
+
+
+if __name__ == "__main__":
+    unittest.main()
