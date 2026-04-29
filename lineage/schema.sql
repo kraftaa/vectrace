@@ -65,3 +65,4 @@ CREATE INDEX IF NOT EXISTS idx_vectors_chunk_id ON vectors(chunk_id);
 CREATE INDEX IF NOT EXISTS idx_vectors_pipeline_run_id ON vectors(pipeline_run_id);
 CREATE INDEX IF NOT EXISTS idx_retrieval_events_vector ON retrieval_events(collection_name, vector_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_retrieval_events_query ON retrieval_events(query_id, rank);
+CREATE INDEX IF NOT EXISTS idx_retrieval_events_query_text ON retrieval_events(query_text, collection_name, created_at);

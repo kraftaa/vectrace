@@ -6,6 +6,13 @@ __pycache__/
 .venv/
 vectrace.db
 lineage.html
+/lineage-demo.html
+/trace-demo.html
+/trace-latest.html
+/ask-trace*.html
+/ask-trace*.json
+/qa-trace*.html
+/qa-trace*.json
 dist/
 build/
 *.egg-info/

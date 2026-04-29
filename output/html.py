@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -13,7 +14,35 @@ def _safe(value: object) -> str:
     return escape(str(value))
 
 
-def generate_report(lineage: dict, output_path: str, retrieval: dict | None = None) -> None:
+def _path_link(path: object) -> str:
+    if path is None:
+        return "-"
+    text = str(path)
+    label = escape(text)
+    href: str | None = None
+    if text.startswith(("http://", "https://", "file://", "s3://")):
+        href = text
+    elif text.startswith("/"):
+        href = f"file://{text}"
+    elif len(text) >= 3 and text[1] == ":" and text[2] in ("\\", "/"):
+        normalized = text.replace("\\", "/")
+        href = f"file:///{normalized}"
+    if href is not None:
+        href_escaped = escape(href, quote=True)
+        return (
+            f'<a href="{href_escaped}" target="_blank" rel="noopener noreferrer">'
+            f"<code>{label}</code></a>"
+        )
+    return f"<code>{label}</code>"
+
+
+def generate_report(
+    lineage: dict,
+    output_path: str,
+    retrieval: dict | None = None,
+    evidence: dict | None = None,
+    redact_preview: bool = False,
+) -> None:
     """Generate an HTML report from trace data."""
     if not lineage:
         raise ValueError("lineage is required to render a report")
@@ -24,19 +53,65 @@ def generate_report(lineage: dict, output_path: str, retrieval: dict | None = No
     retrieval_section = ""
     if retrieval:
         metadata = retrieval.get("metadata")
+        if redact_preview and isinstance(metadata, dict) and "evidence_text" in metadata:
+            metadata = dict(metadata)
+            text = "" if metadata.get("evidence_text") is None else str(metadata.get("evidence_text"))
+            metadata["evidence_text"] = f"[REDACTED:{len(text)} chars]" if text else "[REDACTED]"
+        if isinstance(metadata, (dict, list)):
+            metadata_display = json.dumps(metadata, indent=2, sort_keys=True)
+        else:
+            metadata_display = metadata
+        evidence_text = None
+        if isinstance(metadata, dict):
+            evidence_text = metadata.get("evidence_text")
+        evidence_row = ""
+        if evidence_text:
+            evidence_row = (
+                f'\n      <div class="preview"><strong>Evidence Text</strong>\\n{_safe(evidence_text)}</div>'
+            )
         retrieval_section = f"""
     <section class="card">
       <h2>Retrieval Context</h2>
       <dl>
         <dt>Event ID</dt><dd><code>{_safe(retrieval.get("id"))}</code></dd>
         <dt>Query ID</dt><dd><code>{_safe(retrieval.get("query_id"))}</code></dd>
+        <dt>Vector ID</dt><dd><code>{_safe(retrieval.get("vector_id"))}</code></dd>
+        <dt>Trace Mode</dt><dd><span class="badge">{_safe(retrieval.get("trace_mode"))}</span></dd>
         <dt>Rank</dt><dd>{_safe(retrieval.get("rank"))}</dd>
         <dt>Score</dt><dd>{_safe(retrieval.get("score"))}</dd>
         <dt>Recorded At</dt><dd>{_safe(retrieval.get("created_at"))}</dd>
       </dl>
       <div class="preview"><strong>Query</strong>\n{_safe(retrieval.get("query_text"))}</div>
       <div class="preview"><strong>Final Answer</strong>\n{_safe(retrieval.get("final_answer"))}</div>
-      <div class="preview"><strong>Metadata</strong>\n{_safe(metadata)}</div>
+{evidence_row}
+      <div class="preview"><strong>Metadata</strong>\n{_safe(metadata_display)}</div>
+    </section>
+"""
+    evidence_section = ""
+    if evidence:
+        support_status = evidence.get("support_status")
+        support_reason = evidence.get("support_reason")
+        support_details = evidence.get("support_details")
+        support_details_display = "-"
+        if isinstance(support_details, (dict, list)):
+            support_details_display = json.dumps(support_details, indent=2, sort_keys=True)
+        elif support_details is not None:
+            support_details_display = str(support_details)
+        evidence_section = f"""
+    <section class="card">
+      <h2>Answer Evidence</h2>
+      <dl>
+        <dt>Support</dt><dd><span class="badge">{_safe(support_status)}</span></dd>
+        <dt>Assessment</dt><dd>{_safe(support_reason)}</dd>
+        <dt>Vector ID</dt><dd><code>{_safe(evidence.get("vector_id"))}</code></dd>
+        <dt>Collection</dt><dd><span class="badge">{_safe(evidence.get("collection_name"))}</span></dd>
+        <dt>Trace Mode</dt><dd><span class="badge">{_safe(evidence.get("trace_mode"))}</span></dd>
+        <dt>Chunk ID</dt><dd><code>{_safe(evidence.get("chunk_id"))}</code></dd>
+        <dt>Chunk Index</dt><dd>{_safe(evidence.get("chunk_index"))}</dd>
+        <dt>Source Path</dt><dd>{_path_link(evidence.get("source_path"))}</dd>
+      </dl>
+      <div class="preview"><strong>Retrieved Text Snippet</strong>\n{_safe(evidence.get("chunk_text"))}</div>
+      <div class="preview"><strong>Assessment Details</strong>\n{_safe(support_details_display)}</div>
     </section>
 """
 
@@ -158,6 +233,8 @@ def generate_report(lineage: dict, output_path: str, retrieval: dict | None = No
       <h1>VecTrace Trace Report</h1>
       <p>Generated at {_safe(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))}</p>
     </section>
+{retrieval_section}
+{evidence_section}
 
     <section class="card">
       <h2>Vector</h2>
@@ -187,13 +264,12 @@ def generate_report(lineage: dict, output_path: str, retrieval: dict | None = No
       <h2>Source Document</h2>
       <dl>
         <dt>ID</dt><dd><code>{_safe(document.get("id"))}</code></dd>
-        <dt>Path</dt><dd><code>{_safe(document.get("source_path"))}</code></dd>
+        <dt>Path</dt><dd>{_path_link(document.get("source_path"))}</dd>
         <dt>Type</dt><dd><span class="badge">{_safe(document.get("source_type"))}</span></dd>
         <dt>Version</dt><dd>{_safe(document.get("version"))}</dd>
         <dt>Content Hash</dt><dd><code>{_safe(document.get("content_hash"))}</code></dd>
       </dl>
     </section>
-{retrieval_section}
 
     <footer>Generated by VecTrace</footer>
   </main>

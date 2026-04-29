@@ -242,6 +242,204 @@ class TrackerQueryTests(unittest.TestCase):
         self.assertEqual(event["query_text"], "latest query")
         self.assertEqual(event["metadata"]["k"], "v2")
 
+    def test_find_retrieval_events_filters(self) -> None:
+        with LineageTracker(self.db_path, autoinit=True) as tracker:
+            tracker.start_pipeline("retrieval_find")
+            tracker.record_document(
+                doc_id="doc_find",
+                source_path="/tmp/doc_find.txt",
+                source_type="local",
+                version="v1",
+            )
+            tracker.record_chunk(
+                chunk_id="doc_find:chunk:0",
+                document_id="doc_find",
+                chunk_index=0,
+                strategy="semantic",
+                chunk_size=5,
+                text_preview="find",
+            )
+            tracker.record_vector(
+                vector_id="find_v1",
+                collection_name="support_kb",
+                chunk_id="doc_find:chunk:0",
+                embedding_model="m1",
+            )
+            tracker.record_retrieval_event(
+                query_id="q1",
+                query_text="what is refund policy",
+                final_answer="answer a",
+                collection_name="support_kb",
+                vector_id="find_v1",
+                rank=1,
+                score=0.5,
+                event_id="ev_find_1",
+            )
+            tracker.record_retrieval_event(
+                query_id="q2",
+                query_text="what is refund policy",
+                final_answer="answer b",
+                collection_name="support_kb",
+                vector_id="find_v1",
+                rank=2,
+                score=0.4,
+                event_id="ev_find_2",
+            )
+            tracker.complete_pipeline("success")
+
+        with LineageQuery(self.db_path) as query:
+            all_events = query.find_retrieval_events("what is refund policy", limit=10)
+            only_answer_a = query.find_retrieval_events(
+                "what is refund policy", final_answer="answer a", limit=10
+            )
+
+        self.assertEqual(len(all_events), 2)
+        self.assertEqual(len(only_answer_a), 1)
+        self.assertEqual(only_answer_a[0]["id"], "ev_find_1")
+
+    def test_find_trace_candidates_ranks_by_overlap(self) -> None:
+        with LineageTracker(self.db_path, autoinit=True) as tracker:
+            tracker.start_pipeline("trace_candidates")
+            tracker.record_document(
+                doc_id="doc_candidates",
+                source_path="/tmp/doc_candidates.txt",
+                source_type="local",
+                version="v1",
+            )
+            tracker.record_chunk(
+                chunk_id="doc_candidates:chunk:refund",
+                document_id="doc_candidates",
+                chunk_index=0,
+                strategy="semantic",
+                chunk_size=32,
+                text_preview="Refund policy allows returns within 30 days.",
+            )
+            tracker.record_chunk(
+                chunk_id="doc_candidates:chunk:warranty",
+                document_id="doc_candidates",
+                chunk_index=1,
+                strategy="semantic",
+                chunk_size=28,
+                text_preview="Warranty terms for manufacturer defects.",
+            )
+            tracker.record_vector(
+                vector_id="cand_refund",
+                collection_name="support_kb",
+                chunk_id="doc_candidates:chunk:refund",
+                embedding_model="m1",
+            )
+            tracker.record_vector(
+                vector_id="cand_warranty",
+                collection_name="support_kb",
+                chunk_id="doc_candidates:chunk:warranty",
+                embedding_model="m1",
+            )
+            tracker.complete_pipeline("success")
+
+        with LineageQuery(self.db_path) as query:
+            candidates = query.find_trace_candidates(
+                question="Can I get a refund after 90 days?",
+                collection_name="support_kb",
+                limit=5,
+            )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["vector_id"], "cand_refund")
+        self.assertGreater(candidates[0]["score"], 0.0)
+        self.assertIn("refund", candidates[0]["overlap_terms"])
+
+    def test_find_trace_candidates_is_deterministic_on_ties(self) -> None:
+        with LineageTracker(self.db_path, autoinit=True) as tracker:
+            tracker.start_pipeline("trace_candidates_ties")
+            tracker.record_document(
+                doc_id="doc_candidates_ties",
+                source_path="/tmp/doc_candidates_ties.txt",
+                source_type="local",
+                version="v1",
+            )
+            tracker.record_chunk(
+                chunk_id="doc_candidates_ties:chunk:2",
+                document_id="doc_candidates_ties",
+                chunk_index=2,
+                strategy="semantic",
+                chunk_size=20,
+                text_preview="refund policy terms",
+            )
+            tracker.record_chunk(
+                chunk_id="doc_candidates_ties:chunk:1",
+                document_id="doc_candidates_ties",
+                chunk_index=1,
+                strategy="semantic",
+                chunk_size=20,
+                text_preview="refund policy terms",
+            )
+            tracker.record_vector(
+                vector_id="cand_tie_b",
+                collection_name="support_kb",
+                chunk_id="doc_candidates_ties:chunk:2",
+                embedding_model="m1",
+            )
+            tracker.record_vector(
+                vector_id="cand_tie_a",
+                collection_name="support_kb",
+                chunk_id="doc_candidates_ties:chunk:1",
+                embedding_model="m1",
+            )
+            tracker.complete_pipeline("success")
+
+        with LineageQuery(self.db_path) as query:
+            candidates = query.find_trace_candidates(
+                question="refund policy",
+                collection_name="support_kb",
+                limit=2,
+            )
+
+        self.assertEqual([c["vector_id"] for c in candidates], ["cand_tie_a", "cand_tie_b"])
+
+    def test_get_retrieval_event_by_id(self) -> None:
+        with LineageTracker(self.db_path, autoinit=True) as tracker:
+            tracker.start_pipeline("retrieval_by_id")
+            tracker.record_document(
+                doc_id="doc_by_id",
+                source_path="/tmp/doc_by_id.txt",
+                source_type="local",
+                version="v1",
+            )
+            tracker.record_chunk(
+                chunk_id="doc_by_id:chunk:0",
+                document_id="doc_by_id",
+                chunk_index=0,
+                strategy="semantic",
+                chunk_size=5,
+                text_preview="hello",
+            )
+            tracker.record_vector(
+                vector_id="by_id_v",
+                collection_name="support_kb",
+                chunk_id="doc_by_id:chunk:0",
+                embedding_model="m1",
+            )
+            tracker.record_retrieval_event(
+                query_id="q_by_id",
+                query_text="where",
+                final_answer="there",
+                collection_name="support_kb",
+                vector_id="by_id_v",
+                rank=1,
+                score=0.8,
+                event_id="event_by_id",
+            )
+            tracker.complete_pipeline("success")
+
+        with LineageQuery(self.db_path) as query:
+            event = query.get_retrieval_event("event_by_id")
+
+        self.assertIsNotNone(event)
+        if event is None:
+            return
+        self.assertEqual(event["query_id"], "q_by_id")
+        self.assertEqual(event["vector_id"], "by_id_v")
+
 
 if __name__ == "__main__":
     unittest.main()

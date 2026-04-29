@@ -1,0 +1,103 @@
+{
+  "schema_version": "1.0",
+  "query_id": "sample-query-id",
+  "match": {
+    "retrieval": {
+      "id": "sample-event-id",
+      "query_id": "sample-query-id",
+      "trace_mode": "bootstrap",
+      "query_text": "Can I get a refund after 90 days?",
+      "final_answer": "Yes, refunds are allowed.",
+      "collection_name": "support_kb",
+      "vector_id": "vec_demo_001",
+      "rank": 1,
+      "score": 0.4,
+      "created_at": "2026-04-02T15:39:00+00:00",
+      "metadata": {
+        "score_type": "lexical_overlap_bootstrap",
+        "match_terms": [
+          "refund"
+        ],
+        "chunk_id": "demo_doc_vec_demo_001:chunk:0",
+        "source_path": "s3://demo/customer_refunds_policy.pdf",
+        "evidence_text": "Customers can request a refund within 30 days if the item is defective."
+      }
+    },
+    "trace": {
+      "vector": {
+        "id": "vec_demo_001",
+        "collection_name": "support_kb",
+        "embedding_model": "text-embedding-3-small",
+        "model_version": "2024-06-01",
+        "batch_id": "sample-batch-id",
+        "pipeline_run_id": "sample-pipeline-run-id",
+        "created_at": "2026-04-01T18:13:31+00:00"
+      },
+      "chunk": {
+        "id": "demo_doc_vec_demo_001:chunk:0",
+        "index": 0,
+        "strategy": "semantic",
+        "size": 62,
+        "text_preview": "Customers can request a refund within 30 days if the item is defective."
+      },
+      "document": {
+        "id": "demo_doc_vec_demo_001",
+        "source_path": "s3://demo/customer_refunds_policy.pdf",
+        "source_type": "s3",
+        "version": "v1",
+        "content_hash": "sha256:demo"
+      }
+    },
+    "lineage": {
+      "vector": {
+        "id": "vec_demo_001",
+        "collection_name": "support_kb",
+        "embedding_model": "text-embedding-3-small",
+        "model_version": "2024-06-01",
+        "batch_id": "sample-batch-id",
+        "pipeline_run_id": "sample-pipeline-run-id",
+        "created_at": "2026-04-01T18:13:31+00:00"
+      },
+      "chunk": {
+        "id": "demo_doc_vec_demo_001:chunk:0",
+        "index": 0,
+        "strategy": "semantic",
+        "size": 62,
+        "text_preview": "Customers can request a refund within 30 days if the item is defective."
+      },
+      "document": {
+        "id": "demo_doc_vec_demo_001",
+        "source_path": "s3://demo/customer_refunds_policy.pdf",
+        "source_type": "s3",
+        "version": "v1",
+        "content_hash": "sha256:demo"
+      }
+    },
+    "evidence": {
+      "vector_id": "vec_demo_001",
+      "collection_name": "support_kb",
+      "trace_mode": "bootstrap",
+      "chunk_id": "demo_doc_vec_demo_001:chunk:0",
+      "chunk_index": 0,
+      "chunk_text": "Customers can request a refund within 30 days if the item is defective.",
+      "source_document_id": "demo_doc_vec_demo_001",
+      "source_path": "s3://demo/customer_refunds_policy.pdf",
+      "retrieval_rank": 1,
+      "retrieval_score": 0.4,
+      "support_status": "unsupported",
+      "support_reason": "Question asks about after 90 days, but evidence limits to within 30 days.",
+      "support_details": {
+        "method": "rule_plus_overlap",
+        "answer_polarity": "yes",
+        "query_day_constraint": {
+          "mode": "after",
+          "days": 90
+        },
+        "evidence_day_constraint": {
+          "mode": "within",
+          "days": 30
+        }
+      }
+    }
+  }
+}
