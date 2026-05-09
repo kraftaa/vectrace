@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from typing import Iterable
@@ -75,34 +76,53 @@ class LineageTracker:
         source_page: int | None = None,
         source_section: str | None = None,
     ) -> None:
-        with self.conn:
-            self.conn.execute(
-                """
-                INSERT INTO documents (
-                    id, source_path, source_type, version, content_hash,
-                    source_url, source_page, source_section
+        try:
+            with self.conn:
+                self.conn.execute(
+                    """
+                    INSERT INTO documents (
+                        id, source_path, source_type, version, content_hash,
+                        source_url, source_page, source_section
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        source_path = excluded.source_path,
+                        source_type = excluded.source_type,
+                        version = excluded.version,
+                        content_hash = excluded.content_hash,
+                        source_url = excluded.source_url,
+                        source_page = excluded.source_page,
+                        source_section = excluded.source_section
+                    """,
+                    (
+                        doc_id,
+                        source_path,
+                        source_type,
+                        version,
+                        content_hash,
+                        source_url,
+                        source_page,
+                        source_section,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    source_path = excluded.source_path,
-                    source_type = excluded.source_type,
-                    version = excluded.version,
-                    content_hash = excluded.content_hash,
-                    source_url = excluded.source_url,
-                    source_page = excluded.source_page,
-                    source_section = excluded.source_section
-                """,
-                (
-                    doc_id,
-                    source_path,
-                    source_type,
-                    version,
-                    content_hash,
-                    source_url,
-                    source_page,
-                    source_section,
-                ),
-            )
+        except sqlite3.OperationalError as exc:
+            # Backward-compat for older DBs that predate deep-link columns.
+            message = str(exc).lower()
+            if "no such column" not in message and "has no column named" not in message:
+                raise
+            with self.conn:
+                self.conn.execute(
+                    """
+                    INSERT INTO documents (id, source_path, source_type, version, content_hash)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        source_path = excluded.source_path,
+                        source_type = excluded.source_type,
+                        version = excluded.version,
+                        content_hash = excluded.content_hash
+                    """,
+                    (doc_id, source_path, source_type, version, content_hash),
+                )
 
     def record_chunk(
         self,

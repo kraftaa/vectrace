@@ -277,6 +277,66 @@ class CLITests(unittest.TestCase):
         self.assertEqual(vector_count, 4)
         self.assertIn("vec_auto_00002", second_stdout.getvalue())
 
+    def test_seed_demo_surfaces_infer_start_index_db_errors(self) -> None:
+        with patch("vectrace.infer_next_start_index", side_effect=sqlite3.OperationalError("db locked")):
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                result = cli(
+                    [
+                        "seed-demo",
+                        "--db",
+                        self.db_path,
+                        "--collection",
+                        "support_kb",
+                        "--vectors",
+                        "2",
+                        "--docs",
+                        "1",
+                    ]
+                )
+        self.assertEqual(result, 2)
+        self.assertIn("Trace database error", stderr.getvalue())
+
+    def test_onboard_surfaces_vector_exists_db_errors(self) -> None:
+        with patch("vectrace.vector_exists", side_effect=sqlite3.OperationalError("db locked")):
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                result = cli(
+                    [
+                        "onboard",
+                        "--db",
+                        self.db_path,
+                        "--vector-id",
+                        "vec_demo_test",
+                        "--collection",
+                        "support_kb",
+                        "--output",
+                        self.report_path,
+                    ]
+                )
+        self.assertEqual(result, 2)
+        self.assertIn("Trace database error", stderr.getvalue())
+
+    def test_record_retrieval_surfaces_vector_exists_db_errors(self) -> None:
+        with patch("vectrace.vector_exists", side_effect=sqlite3.OperationalError("db locked")):
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                result = cli(
+                    [
+                        "record-retrieval",
+                        "--db",
+                        self.db_path,
+                        "--collection",
+                        "support_kb",
+                        "--vector-id",
+                        "v1",
+                        "--query-text",
+                        "hello",
+                    ]
+                )
+        self.assertEqual(result, 2)
+        self.assertIn("Trace database error", stderr.getvalue())
+
     def test_trace_returns_not_found(self) -> None:
         cli(["init", "--db", self.db_path])
         stderr = io.StringIO()

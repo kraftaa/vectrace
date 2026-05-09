@@ -421,21 +421,27 @@ def cli(argv: list[str] | None = None) -> int:
             print("Skipped demo seed (--skip-seed).")
             return 0
 
-        if vector_exists(args.db, args.vector_id, args.collection):
-            print(
-                f"Demo vector '{args.vector_id}' already exists in '{args.collection}'; "
-                "seed step skipped."
-            )
-        elif db_has_vectors(args.db):
-            print(
-                "Detected existing trace records but requested demo vector is missing; "
-                "seeding requested demo vector."
-            )
-            seed_demo_lineage(args.db, args.vector_id, args.collection)
-            print(f"Seeded demo trace vector '{args.vector_id}' in collection '{args.collection}'.")
-        else:
-            seed_demo_lineage(args.db, args.vector_id, args.collection)
-            print(f"Seeded demo trace vector '{args.vector_id}' in collection '{args.collection}'.")
+        try:
+            if vector_exists(args.db, args.vector_id, args.collection):
+                print(
+                    f"Demo vector '{args.vector_id}' already exists in '{args.collection}'; "
+                    "seed step skipped."
+                )
+            elif db_has_vectors(args.db):
+                print(
+                    "Detected existing trace records but requested demo vector is missing; "
+                    "seeding requested demo vector."
+                )
+                seed_demo_lineage(args.db, args.vector_id, args.collection)
+                print(
+                    f"Seeded demo trace vector '{args.vector_id}' in collection '{args.collection}'."
+                )
+            else:
+                seed_demo_lineage(args.db, args.vector_id, args.collection)
+                print(f"Seeded demo trace vector '{args.vector_id}' in collection '{args.collection}'.")
+        except sqlite3.OperationalError as exc:
+            print_db_error(exc, args.db)
+            return 2
 
         with LineageQuery(args.db) as query:
             try:
@@ -470,11 +476,15 @@ def cli(argv: list[str] | None = None) -> int:
 
     if args.command == "seed-demo":
         initialize_db(args.db)
-        start_index = (
-            args.start_index
-            if args.start_index is not None
-            else infer_next_start_index(args.db, args.collection, args.prefix)
-        )
+        try:
+            start_index = (
+                args.start_index
+                if args.start_index is not None
+                else infer_next_start_index(args.db, args.collection, args.prefix)
+            )
+        except sqlite3.OperationalError as exc:
+            print_db_error(exc, args.db)
+            return 2
         try:
             first_id, last_id = seed_bulk_demo_lineage(
                 db_path=args.db,
@@ -503,7 +513,12 @@ def cli(argv: list[str] | None = None) -> int:
         if args.rank <= 0:
             print("--rank must be > 0", file=sys.stderr)
             return 2
-        if not vector_exists(args.db, args.vector_id, args.collection):
+        try:
+            vector_present = vector_exists(args.db, args.vector_id, args.collection)
+        except sqlite3.OperationalError as exc:
+            print_db_error(exc, args.db)
+            return 2
+        if not vector_present:
             print(
                 f"Vector '{args.vector_id}' not found in collection '{args.collection}'. "
                 "Record vector trace data first.",

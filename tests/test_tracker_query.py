@@ -397,6 +397,59 @@ class TrackerQueryTests(unittest.TestCase):
 
         self.assertEqual([c["vector_id"] for c in candidates], ["cand_tie_a", "cand_tie_b"])
 
+    def test_find_trace_candidates_considers_rows_beyond_initial_order_window(self) -> None:
+        with LineageTracker(self.db_path, autoinit=True) as tracker:
+            tracker.start_pipeline("trace_candidates_large")
+            tracker.record_document(
+                doc_id="doc_candidates_large",
+                source_path="/tmp/doc_candidates_large.txt",
+                source_type="local",
+                version="v1",
+            )
+            for idx in range(360):
+                chunk_id = f"doc_candidates_large:chunk:{idx}"
+                tracker.record_chunk(
+                    chunk_id=chunk_id,
+                    document_id="doc_candidates_large",
+                    chunk_index=idx,
+                    strategy="semantic",
+                    chunk_size=28,
+                    text_preview="refund policy details generic",
+                )
+                tracker.record_vector(
+                    vector_id=f"cand_large_{idx}",
+                    collection_name="support_kb",
+                    chunk_id=chunk_id,
+                    embedding_model="m1",
+                )
+
+            tracker.record_chunk(
+                chunk_id="doc_candidates_large:chunk:perfect",
+                document_id="doc_candidates_large",
+                chunk_index=999,
+                strategy="semantic",
+                chunk_size=96,
+                text_preview="refund policy after 90 days defective item eligibility details",
+            )
+            tracker.record_vector(
+                vector_id="cand_large_perfect",
+                collection_name="support_kb",
+                chunk_id="doc_candidates_large:chunk:perfect",
+                embedding_model="m1",
+            )
+            tracker.complete_pipeline("success")
+
+        with LineageQuery(self.db_path) as query:
+            candidates = query.find_trace_candidates(
+                question="refund policy after 90 days defective item",
+                collection_name="support_kb",
+                limit=1,
+            )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["vector_id"], "cand_large_perfect")
+        self.assertGreaterEqual(candidates[0]["score"], 0.95)
+
     def test_get_retrieval_event_by_id(self) -> None:
         with LineageTracker(self.db_path, autoinit=True) as tracker:
             tracker.start_pipeline("retrieval_by_id")
@@ -462,6 +515,34 @@ class TrackerQueryTests(unittest.TestCase):
         # Must NOT raise — that is the intended idempotent path.
         _apply_idempotent_alters(FakeConn())  # type: ignore[arg-type]
 
+    def test_apply_idempotent_alters_rejects_unsafe_identifier(self) -> None:
+        from unittest.mock import patch
+
+        from lineage.models import _apply_idempotent_alters
+
+        class FakeConn:
+            def execute(self, sql: str) -> None:
+                pass
+
+        unsafe = (("source_url; DROP TABLE documents", "TEXT"),)
+        with patch("lineage.models._DOCUMENT_DEEP_LINK_COLUMNS", unsafe):
+            with self.assertRaises(ValueError):
+                _apply_idempotent_alters(FakeConn())  # type: ignore[arg-type]
+
+    def test_apply_idempotent_alters_rejects_unsafe_column_type(self) -> None:
+        from unittest.mock import patch
+
+        from lineage.models import _apply_idempotent_alters
+
+        class FakeConn:
+            def execute(self, sql: str) -> None:
+                pass
+
+        unsafe = (("source_url", "TEXT; DROP TABLE documents"),)
+        with patch("lineage.models._DOCUMENT_DEEP_LINK_COLUMNS", unsafe):
+            with self.assertRaises(ValueError):
+                _apply_idempotent_alters(FakeConn())  # type: ignore[arg-type]
+
     def test_create_connection_sets_busy_timeout(self) -> None:
         conn = create_connection(self.db_path)
         try:
@@ -510,6 +591,55 @@ class TrackerQueryTests(unittest.TestCase):
         self.assertEqual(lineage["document"]["source_url"], "https://example.com/policy.pdf")
         self.assertEqual(lineage["document"]["source_page"], 7)
         self.assertEqual(lineage["document"]["source_section"], "3.2 Refunds")
+
+    def test_record_document_falls_back_on_legacy_schema(self) -> None:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE documents (
+                    id TEXT PRIMARY KEY,
+                    source_path TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    version TEXT,
+                    content_hash TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        with LineageTracker(self.db_path, autoinit=False) as tracker:
+            tracker.record_document(
+                doc_id="legacy_doc",
+                source_path="/tmp/legacy.txt",
+                source_type="local",
+                version="v1",
+                content_hash="sha256:legacy",
+                source_url="https://example.com/legacy.pdf",
+                source_page=3,
+                source_section="legacy",
+            )
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT id, source_path, source_type, version, content_hash FROM documents WHERE id = ?",
+                ("legacy_doc",),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertIsNotNone(row)
+        if row is None:
+            return
+        self.assertEqual(row[0], "legacy_doc")
+        self.assertEqual(row[1], "/tmp/legacy.txt")
+        self.assertEqual(row[2], "local")
+        self.assertEqual(row[3], "v1")
+        self.assertEqual(row[4], "sha256:legacy")
 
 
 if __name__ == "__main__":

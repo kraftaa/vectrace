@@ -277,20 +277,7 @@ class LineageQuery:
             like_clause = " OR ".join(["LOWER(c.text_preview) LIKE ?"] * len(search_terms))
             sql += f" AND ({like_clause})"
             params.extend([f"%{term}%" for term in search_terms])
-        prefetch_limit = max(limit * 80, 300)
-        sql += """
-            ORDER BY
-                CASE WHEN c.chunk_index IS NULL THEN 1 ELSE 0 END ASC,
-                c.chunk_index ASC,
-                v.id ASC
-            LIMIT ?
-        """
-        params.append(prefetch_limit)
-
-        rows = self.conn.execute(
-            sql,
-            params,
-        ).fetchall()
+        rows = self.conn.execute(sql, params).fetchall()
         scored: list[dict[str, Any]] = []
         for row in rows:
             preview = row["text_preview"] or ""

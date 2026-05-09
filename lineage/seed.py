@@ -3,47 +3,40 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 
-from lineage.models import ChunkRecord, VectorRecord
+from lineage.models import ChunkRecord, VectorRecord, create_connection
 from lineage.query import LineageQuery
 from lineage.tracker import LineageTracker
 
 
 def db_has_vectors(db_path: str) -> bool:
-    conn = sqlite3.connect(db_path)
+    conn = create_connection(db_path)
     try:
         row = conn.execute("SELECT COUNT(*) FROM vectors").fetchone()
         return bool(row and row[0] > 0)
-    except sqlite3.OperationalError:
-        return False
     finally:
         conn.close()
 
 
 def vector_exists(db_path: str, vector_id: str, collection: str) -> bool:
-    conn = sqlite3.connect(db_path)
+    conn = create_connection(db_path)
     try:
         row = conn.execute(
             "SELECT 1 FROM vectors WHERE id = ? AND collection_name = ? LIMIT 1",
             (vector_id, collection),
         ).fetchone()
         return row is not None
-    except sqlite3.OperationalError:
-        return False
     finally:
         conn.close()
 
 
 def infer_next_start_index(db_path: str, collection: str, prefix: str) -> int:
-    conn = sqlite3.connect(db_path)
+    conn = create_connection(db_path)
     try:
         rows = conn.execute(
             "SELECT id FROM vectors WHERE collection_name = ? AND id LIKE ?",
             (collection, f"{prefix}%"),
         ).fetchall()
-    except sqlite3.OperationalError:
-        return 0
     finally:
         conn.close()
 
