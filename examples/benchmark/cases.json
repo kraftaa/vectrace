@@ -1,0 +1,46 @@
+{
+  "schema_version": "1.0",
+  "description": "Five canonical wrong-answer cases for VecTrace's rule_plus_overlap support assessor. Each case asserts the expected support_status for a (question, final_answer, evidence_text) triple. Used by tests/test_benchmark.py to guard regressions in output/support.py.",
+  "cases": [
+    {
+      "id": "refund_temporal_yes",
+      "description": "Question asks about a window outside the policy; affirmative answer should be flagged unsupported.",
+      "query_text": "Can I get a refund after 90 days?",
+      "final_answer": "Yes, refunds are allowed.",
+      "evidence_text": "Refunds are only allowed within 30 days for eligible defects.",
+      "expected_support_status": "unsupported"
+    },
+    {
+      "id": "refund_temporal_no",
+      "description": "Same temporal mismatch but with a denying answer should be flagged supported.",
+      "query_text": "Can I get a refund after 90 days?",
+      "final_answer": "No, refunds are not permitted after 90 days.",
+      "evidence_text": "Refunds are only allowed within 30 days for eligible defects.",
+      "expected_support_status": "supported"
+    },
+    {
+      "id": "hallucinated_phone_number",
+      "description": "Answer fabricates a phone number absent from the evidence; lexical overlap is zero.",
+      "query_text": "What is the security incident phone number?",
+      "final_answer": "The number is 555-1234.",
+      "evidence_text": "For security incidents, file a ticket in the security portal.",
+      "expected_support_status": "unsupported"
+    },
+    {
+      "id": "polarity_only_answer",
+      "description": "Polarity-only answer with no constraint pattern in the question must be returned as unclear, not silently passed.",
+      "query_text": "Is data retained for 30 days?",
+      "final_answer": "Yes.",
+      "evidence_text": "Customer data is retained for 90 days.",
+      "expected_support_status": "unclear"
+    },
+    {
+      "id": "high_overlap_supported",
+      "description": "Answer paraphrases evidence with high token overlap; should be marked supported.",
+      "query_text": "How long is the warranty?",
+      "final_answer": "The warranty lasts twelve months from purchase.",
+      "evidence_text": "Our warranty covers products for twelve months from the date of purchase.",
+      "expected_support_status": "supported"
+    }
+  ]
+}

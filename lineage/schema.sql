@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS documents (
     source_type TEXT NOT NULL,
     version TEXT,
     content_hash TEXT,
+    source_url TEXT,
+    source_page INTEGER,
+    source_section TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

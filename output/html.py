@@ -8,6 +8,15 @@ from html import escape
 from pathlib import Path
 
 
+_SAFE_URL_SCHEMES: tuple[str, ...] = (
+    "https://",
+    "http://",
+    "s3://",
+    "file://",
+    "ftp://",
+)
+
+
 def _safe(value: object) -> str:
     if value is None:
         return "-"
@@ -34,6 +43,84 @@ def _path_link(path: object) -> str:
             f"<code>{label}</code></a>"
         )
     return f"<code>{label}</code>"
+
+
+def _deep_link(url: object, page: object) -> str:
+    """Render a clickable deep-link to ``url``, adding ``#page=N`` for PDFs.
+
+    The fragment lets browsers' built-in PDF viewers jump directly to the cited
+    page; non-PDF targets still get a clickable link.
+    """
+    if url is None:
+        return "-"
+    text = str(url)
+    if not text:
+        return "-"
+    # Only render an <a href> for known-safe schemes; anything else (e.g.
+    # javascript:, data:) is shown as plain text to prevent stored XSS when
+    # source_url is sourced from untrusted DB writes.
+    if not text.lower().lstrip().startswith(_SAFE_URL_SCHEMES):
+        return escape(text)
+    href = text
+    label = escape(text)
+    if page is not None:
+        try:
+            page_int = int(page)
+            if page_int > 0:
+                href = f"{href}#page={page_int}"
+                label = f"{label} <span class='badge'>page {page_int}</span>"
+        except (TypeError, ValueError):
+            pass
+    href_escaped = escape(href, quote=True)
+    return (
+        f'<a href="{href_escaped}" target="_blank" rel="noopener noreferrer">{label}</a>'
+    )
+
+
+def _why_this_match_panel(evidence: dict) -> str:
+    details = evidence.get("support_details") or {}
+    if not isinstance(details, dict):
+        details = {}
+    overlap_terms = details.get("overlap_terms")
+    overlap_terms_display = "-"
+    if isinstance(overlap_terms, list) and overlap_terms:
+        overlap_terms_display = ", ".join(escape(str(t)) for t in overlap_terms)
+    elif isinstance(overlap_terms, list):
+        overlap_terms_display = "(none)"
+
+    overlap_ratio = details.get("overlap_ratio")
+    overlap_ratio_display = (
+        f"{overlap_ratio:.2f}" if isinstance(overlap_ratio, (int, float)) else "-"
+    )
+
+    polarity = details.get("answer_polarity") or "-"
+
+    constraint_rows = ""
+    query_constraint = details.get("query_day_constraint")
+    evidence_constraint = details.get("evidence_day_constraint")
+    if isinstance(query_constraint, dict) and isinstance(evidence_constraint, dict):
+        constraint_rows = (
+            f'\n        <dt>Query Constraint</dt><dd><span class="badge">'
+            f'{_safe(query_constraint.get("mode"))} {_safe(query_constraint.get("days"))} days'
+            f"</span></dd>"
+            f'\n        <dt>Evidence Constraint</dt><dd><span class="badge">'
+            f'{_safe(evidence_constraint.get("mode"))} {_safe(evidence_constraint.get("days"))} days'
+            f"</span></dd>"
+        )
+
+    return f"""
+    <section class="card">
+      <h2>Why This Match</h2>
+      <dl>
+        <dt>Trace Mode</dt><dd><span class="badge">{_safe(evidence.get("trace_mode"))}</span></dd>
+        <dt>Rank</dt><dd>{_safe(evidence.get("retrieval_rank"))}</dd>
+        <dt>Score</dt><dd>{_safe(evidence.get("retrieval_score"))}</dd>
+        <dt>Answer Polarity</dt><dd><span class="badge">{_safe(polarity)}</span></dd>
+        <dt>Overlap Ratio</dt><dd>{_safe(overlap_ratio_display)}</dd>
+        <dt>Overlap Terms</dt><dd>{overlap_terms_display}</dd>{constraint_rows}
+      </dl>
+    </section>
+"""
 
 
 def generate_report(
@@ -109,11 +196,14 @@ def generate_report(
         <dt>Chunk ID</dt><dd><code>{_safe(evidence.get("chunk_id"))}</code></dd>
         <dt>Chunk Index</dt><dd>{_safe(evidence.get("chunk_index"))}</dd>
         <dt>Source Path</dt><dd>{_path_link(evidence.get("source_path"))}</dd>
+        <dt>Source URL</dt><dd>{_deep_link(evidence.get("source_url"), evidence.get("source_page"))}</dd>
+        <dt>Source Section</dt><dd>{_safe(evidence.get("source_section"))}</dd>
       </dl>
       <div class="preview"><strong>Retrieved Text Snippet</strong>\n{_safe(evidence.get("chunk_text"))}</div>
       <div class="preview"><strong>Assessment Details</strong>\n{_safe(support_details_display)}</div>
     </section>
 """
+    why_match_section = _why_this_match_panel(evidence) if evidence else ""
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -235,6 +325,7 @@ def generate_report(
     </section>
 {retrieval_section}
 {evidence_section}
+{why_match_section}
 
     <section class="card">
       <h2>Vector</h2>
@@ -268,6 +359,8 @@ def generate_report(
         <dt>Type</dt><dd><span class="badge">{_safe(document.get("source_type"))}</span></dd>
         <dt>Version</dt><dd>{_safe(document.get("version"))}</dd>
         <dt>Content Hash</dt><dd><code>{_safe(document.get("content_hash"))}</code></dd>
+        <dt>Source URL</dt><dd>{_deep_link(document.get("source_url"), document.get("source_page"))}</dd>
+        <dt>Source Section</dt><dd>{_safe(document.get("source_section"))}</dd>
       </dl>
     </section>
 

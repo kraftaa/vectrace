@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 import unittest
+import unittest.mock
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,13 +20,22 @@ class FakePoint:
     payload: dict
 
 
+@dataclass
+class FakeHit:
+    id: object
+    score: float | None
+    payload: dict | None = None
+
+
 class FakeClient:
-    def __init__(self, fail: bool = False):
+    def __init__(self, fail: bool = False, search_results: list | None = None):
         self.fail = fail
         self.closed = False
         self.upsert_calls = 0
         self.delete_calls = 0
         self.deleted_payloads: list[tuple[str, list]] = []
+        self.search_calls: list[dict] = []
+        self.search_results = search_results or []
 
     def upsert(self, collection_name: str, points: list) -> None:
         self.upsert_calls += 1
@@ -34,6 +45,17 @@ class FakeClient:
     def delete(self, collection_name: str, points_selector: list) -> None:
         self.delete_calls += 1
         self.deleted_payloads.append((collection_name, list(points_selector)))
+
+    def search(self, collection_name: str, query_vector: list[float], limit: int, **kwargs):
+        self.search_calls.append(
+            {
+                "collection_name": collection_name,
+                "query_vector": list(query_vector),
+                "limit": limit,
+                "kwargs": kwargs,
+            }
+        )
+        return list(self.search_results)
 
     def close(self) -> None:
         self.closed = True
@@ -205,6 +227,103 @@ class QdrantConnectorUnitTests(unittest.TestCase):
 
         self.assertEqual(client.delete_calls, 1)
         self.assertEqual(client.deleted_payloads[0], ("support_kb", [21, 22]))
+
+
+class SearchWithTrackingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = str(Path(self.tmp.name) / "vectrace.db")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _seed_vectors(self, tracked: TrackedQdrant, ids: list[str]) -> None:
+        points = [
+            FakePoint(id=vid, vector=[0.1, 0.2, 0.3], payload={"text": f"chunk for {vid}", "chunk_index": idx})
+            for idx, vid in enumerate(ids)
+        ]
+        tracked.upsert_with_lineage(
+            collection_name="support_kb",
+            points=points,
+            document_id="doc_1",
+            document_path="/tmp/doc.txt",
+            embedding_model="m1",
+        )
+
+    def test_search_with_tracking_records_each_hit(self) -> None:
+        hits = [
+            FakeHit(id="vec_a", score=0.91, payload={"text": "answer alpha"}),
+            FakeHit(id="vec_b", score=0.72, payload={"text": "answer beta"}),
+        ]
+        client = FakeClient(search_results=hits)
+        with TrackedQdrant(db_path=self.db_path, client=client) as tracked:
+            self._seed_vectors(tracked, ["vec_a", "vec_b"])
+            results, query_id = tracked.search_with_tracking(
+                collection_name="support_kb",
+                query_text="how do refunds work?",
+                query_vector=[0.5, 0.5, 0.5],
+                limit=2,
+                final_answer="Within 30 days.",
+            )
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(len(client.search_calls), 1)
+        self.assertEqual(client.search_calls[0]["limit"], 2)
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            rows = conn.execute(
+                "SELECT vector_id, rank, score, query_id, query_text, final_answer, metadata_json "
+                "FROM retrieval_events ORDER BY rank"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0][0], "vec_a")
+        self.assertEqual(rows[0][1], 1)
+        self.assertAlmostEqual(rows[0][2], 0.91)
+        self.assertEqual(rows[0][3], query_id)
+        self.assertEqual(rows[0][4], "how do refunds work?")
+        self.assertEqual(rows[0][5], "Within 30 days.")
+        metadata = json.loads(rows[0][6])
+        self.assertEqual(metadata.get("trace_mode"), "exact")
+        self.assertEqual(metadata.get("evidence_text"), "answer alpha")
+
+    def test_search_with_tracking_uses_caller_query_id_when_provided(self) -> None:
+        hits = [FakeHit(id="vec_a", score=0.5, payload={"text": "x"})]
+        client = FakeClient(search_results=hits)
+        with TrackedQdrant(db_path=self.db_path, client=client) as tracked:
+            self._seed_vectors(tracked, ["vec_a"])
+            _, returned_id = tracked.search_with_tracking(
+                collection_name="support_kb",
+                query_text="q",
+                query_vector=[0.1, 0.2, 0.3],
+                query_id="caller-supplied-id",
+            )
+        self.assertEqual(returned_id, "caller-supplied-id")
+
+    def test_search_with_tracking_swallows_lineage_write_errors(self) -> None:
+        hits = [FakeHit(id="vec_a", score=0.5, payload={"text": "x"})]
+        client = FakeClient(search_results=hits)
+        tracked = TrackedQdrant(db_path=self.db_path, client=client)
+        try:
+            with unittest.mock.patch.object(
+                tracked.tracker,
+                "record_retrieval_event",
+                side_effect=RuntimeError("db locked"),
+            ):
+                results, _ = tracked.search_with_tracking(
+                    collection_name="support_kb",
+                    query_text="q",
+                    query_vector=[0.1, 0.2, 0.3],
+                )
+        finally:
+            tracked.close()
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(tracked.last_tracking_errors), 1)
+        self.assertIn("vec_a", tracked.last_tracking_errors[0])
+        self.assertIn("db locked", tracked.last_tracking_errors[0])
 
 
 if __name__ == "__main__":

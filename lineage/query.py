@@ -82,7 +82,10 @@ class LineageQuery:
                 d.source_path,
                 d.source_type,
                 d.version AS document_version,
-                d.content_hash
+                d.content_hash,
+                d.source_url,
+                d.source_page,
+                d.source_section
             FROM vectors v
             JOIN chunks c ON v.chunk_id = c.id
             JOIN documents d ON c.document_id = d.id
@@ -126,6 +129,9 @@ class LineageQuery:
                 "source_type": row["source_type"],
                 "version": row["document_version"],
                 "content_hash": row["content_hash"],
+                "source_url": row["source_url"],
+                "source_page": row["source_page"],
+                "source_section": row["source_section"],
             },
         }
 

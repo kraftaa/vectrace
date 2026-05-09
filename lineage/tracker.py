@@ -71,19 +71,37 @@ class LineageTracker:
         source_type: str,
         version: str = "v1",
         content_hash: str | None = None,
+        source_url: str | None = None,
+        source_page: int | None = None,
+        source_section: str | None = None,
     ) -> None:
         with self.conn:
             self.conn.execute(
                 """
-                INSERT INTO documents (id, source_path, source_type, version, content_hash)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO documents (
+                    id, source_path, source_type, version, content_hash,
+                    source_url, source_page, source_section
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     source_path = excluded.source_path,
                     source_type = excluded.source_type,
                     version = excluded.version,
-                    content_hash = excluded.content_hash
+                    content_hash = excluded.content_hash,
+                    source_url = excluded.source_url,
+                    source_page = excluded.source_page,
+                    source_section = excluded.source_section
                 """,
-                (doc_id, source_path, source_type, version, content_hash),
+                (
+                    doc_id,
+                    source_path,
+                    source_type,
+                    version,
+                    content_hash,
+                    source_url,
+                    source_page,
+                    source_section,
+                ),
             )
 
     def record_chunk(

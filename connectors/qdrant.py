@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import sys
+import uuid
 from typing import Any, Iterable
 
 from lineage.models import ChunkRecord, VectorRecord
@@ -74,6 +77,7 @@ class TrackedQdrant:
             self.client = QdrantClient(url=qdrant_url, api_key=api_key)
             self._owns_client = True
         self.tracker = LineageTracker(db_path=db_path, autoinit=True)
+        self.last_tracking_errors: list[str] = []
 
     def __enter__(self) -> "TrackedQdrant":
         return self
@@ -161,6 +165,66 @@ class TrackedQdrant:
             self.tracker.complete_pipeline(status="failed")
             raise
         self.tracker.complete_pipeline(status="success")
+
+    def search_with_tracking(
+        self,
+        collection_name: str,
+        query_text: str,
+        query_vector: list[float],
+        limit: int = 5,
+        final_answer: str | None = None,
+        query_id: str | None = None,
+        metadata: dict | None = None,
+        **search_kwargs: Any,
+    ) -> tuple[list[Any], str]:
+        """Run ``client.search()`` and record each hit as a retrieval event.
+
+        Lineage writes are best-effort: a SQLite failure here will not raise,
+        because the search itself has already returned results to the caller's
+        RAG pipeline. Failures are reported on stderr and collected in
+        ``self.last_tracking_errors`` for programmatic handling.
+
+        Returns ``(hits, query_id)``. ``query_id`` is auto-generated when omitted
+        so the caller can later attach a final answer or correlate logs.
+        """
+        hits = self.client.search(
+            collection_name=collection_name,
+            query_vector=query_vector,
+            limit=limit,
+            **search_kwargs,
+        )
+        resolved_query_id = query_id or str(uuid.uuid4())
+        base_metadata: dict[str, Any] = {"trace_mode": "exact"}
+        if metadata:
+            base_metadata.update(metadata)
+        self.last_tracking_errors = []
+
+        for rank, hit in enumerate(hits, start=1):
+            hit_metadata = dict(base_metadata)
+            payload = getattr(hit, "payload", None)
+            if isinstance(payload, dict):
+                evidence_text = payload.get("text") or payload.get("evidence_text")
+                if isinstance(evidence_text, str) and evidence_text:
+                    hit_metadata["evidence_text"] = evidence_text[:500]
+            try:
+                self.tracker.record_retrieval_event(
+                    query_id=resolved_query_id,
+                    query_text=query_text,
+                    final_answer=final_answer,
+                    collection_name=collection_name,
+                    vector_id=str(hit.id),
+                    rank=rank,
+                    score=float(hit.score) if hit.score is not None else None,
+                    metadata_json=json.dumps(hit_metadata, sort_keys=True),
+                )
+            except Exception as exc:
+                error_msg = (
+                    f"vectrace: failed to record retrieval event for vector "
+                    f"'{hit.id}' (rank={rank}): {exc}"
+                )
+                self.last_tracking_errors.append(error_msg)
+                print(error_msg, file=sys.stderr)
+        return hits, resolved_query_id
 
     def _rollback_qdrant_points(self, collection_name: str, point_ids: list[Any]) -> None:
         if not point_ids:
