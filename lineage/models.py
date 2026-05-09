@@ -33,9 +33,12 @@ class VectorRecord:
 
 
 def create_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA busy_timeout = 30000;")
+    # WAL mode reduces writer contention for CLI + ingestion workloads.
+    conn.execute("PRAGMA journal_mode = WAL;")
     return conn
 
 
@@ -45,10 +48,34 @@ def load_schema_sql() -> str:
     return SCHEMA_PATH.read_text(encoding="utf-8")
 
 
+_DOCUMENT_DEEP_LINK_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("source_url", "TEXT"),
+    ("source_page", "INTEGER"),
+    ("source_section", "TEXT"),
+)
+
+
+def _apply_idempotent_alters(conn: sqlite3.Connection) -> None:
+    """Add new optional columns to existing DBs.
+
+    Until a schema_version migration framework lands, this is how we
+    forward-port older databases. Only the "duplicate column" error is
+    swallowed; "database is locked", schema corruption, and other genuine
+    failures must propagate so callers don't get a misleading success.
+    """
+    for column, column_type in _DOCUMENT_DEEP_LINK_COLUMNS:
+        try:
+            conn.execute(f"ALTER TABLE documents ADD COLUMN {column} {column_type}")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc):
+                raise
+
+
 def initialize_db(db_path: str = DEFAULT_DB_PATH) -> None:
     conn = create_connection(db_path)
     try:
         conn.executescript(load_schema_sql())
+        _apply_idempotent_alters(conn)
         conn.commit()
     finally:
         conn.close()

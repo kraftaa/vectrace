@@ -755,6 +755,85 @@ class CLITests(unittest.TestCase):
             payload["retrieval"]["metadata"]["evidence_text"],
         )
 
+    def test_trace_redact_preview_does_not_change_support_assessment(self) -> None:
+        with LineageTracker(self.db_path, autoinit=True) as tracker:
+            tracker.start_pipeline("cli_redact_preview_support_consistency")
+            tracker.record_document(
+                doc_id="doc_support_consistency",
+                source_path="/tmp/doc_support_consistency.txt",
+                source_type="local",
+                version="v1",
+            )
+            tracker.record_chunk(
+                chunk_id="doc_support_consistency:chunk:0",
+                document_id="doc_support_consistency",
+                chunk_index=0,
+                strategy="semantic",
+                chunk_size=80,
+                text_preview="Refunds are only allowed within 30 days for eligible defects.",
+            )
+            tracker.record_vector(
+                vector_id="support_consistency_v",
+                collection_name="support_kb",
+                chunk_id="doc_support_consistency:chunk:0",
+                embedding_model="m1",
+            )
+            tracker.record_retrieval_event(
+                query_id="support_consistency_q",
+                query_text="Can I get a refund after 90 days?",
+                final_answer="No, refunds are not allowed.",
+                collection_name="support_kb",
+                vector_id="support_consistency_v",
+                rank=1,
+                score=0.9,
+            )
+            tracker.complete_pipeline("success")
+
+        plain_stdout = io.StringIO()
+        with redirect_stdout(plain_stdout):
+            plain_result = cli(
+                [
+                    "trace",
+                    "--db",
+                    self.db_path,
+                    "--vector-id",
+                    "support_consistency_v",
+                    "--collection",
+                    "support_kb",
+                    "--format",
+                    "json",
+                    "--include-retrieval",
+                ]
+            )
+        self.assertEqual(plain_result, 0)
+        plain_payload = json.loads(plain_stdout.getvalue())
+
+        redacted_stdout = io.StringIO()
+        with redirect_stdout(redacted_stdout):
+            redacted_result = cli(
+                [
+                    "trace",
+                    "--db",
+                    self.db_path,
+                    "--vector-id",
+                    "support_consistency_v",
+                    "--collection",
+                    "support_kb",
+                    "--format",
+                    "json",
+                    "--include-retrieval",
+                    "--redact-preview",
+                ]
+            )
+        self.assertEqual(redacted_result, 0)
+        redacted_payload = json.loads(redacted_stdout.getvalue())
+
+        self.assertEqual(plain_payload["evidence"]["support_status"], "supported")
+        self.assertEqual(
+            redacted_payload["evidence"]["support_status"],
+            plain_payload["evidence"]["support_status"],
+        )
+
     def test_record_retrieval_evidence_text_rejects_non_object_metadata(self) -> None:
         with LineageTracker(self.db_path, autoinit=True) as tracker:
             tracker.start_pipeline("cli_retrieval_evidence_bad")
@@ -1605,6 +1684,63 @@ class CLITests(unittest.TestCase):
         self.assertIn("[REDACTED:", payload["retrieval"]["metadata"]["answer"])
         self.assertNotIn("secret query text", stdout.getvalue())
         self.assertNotIn("secret answer text", stdout.getvalue())
+
+    def test_trace_redact_retrieval_redacts_non_object_metadata(self) -> None:
+        with LineageTracker(self.db_path, autoinit=True) as tracker:
+            tracker.start_pipeline("cli_redact_retrieval_list_metadata")
+            tracker.record_document(
+                doc_id="doc_redact_list_metadata",
+                source_path="/tmp/doc_redact_list_metadata.txt",
+                source_type="local",
+                version="v1",
+            )
+            tracker.record_chunk(
+                chunk_id="doc_redact_list_metadata:chunk:0",
+                document_id="doc_redact_list_metadata",
+                chunk_index=0,
+                strategy="semantic",
+                chunk_size=16,
+                text_preview="chunk list text",
+            )
+            tracker.record_vector(
+                vector_id="rr_redact_list_v",
+                collection_name="support_kb",
+                chunk_id="doc_redact_list_metadata:chunk:0",
+                embedding_model="m1",
+            )
+            tracker.record_retrieval_event(
+                query_id="qr_redact_list",
+                query_text="secret question list",
+                final_answer="secret answer list",
+                collection_name="support_kb",
+                vector_id="rr_redact_list_v",
+                rank=1,
+                score=0.6,
+                metadata_json='["secret-list-item"]',
+            )
+            tracker.complete_pipeline("success")
+
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            result = cli(
+                [
+                    "trace",
+                    "--db",
+                    self.db_path,
+                    "--vector-id",
+                    "rr_redact_list_v",
+                    "--collection",
+                    "support_kb",
+                    "--format",
+                    "json",
+                    "--include-retrieval",
+                    "--redact-retrieval",
+                ]
+            )
+        self.assertEqual(result, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertIn("[REDACTED:", payload["retrieval"]["metadata"])
+        self.assertNotIn("secret-list-item", stdout.getvalue())
 
     def test_report_redact_retrieval_redacts_query_and_answer_in_html(self) -> None:
         with LineageTracker(self.db_path, autoinit=True) as tracker:

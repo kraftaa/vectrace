@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from lineage.models import create_connection
 from lineage.query import AmbiguousVectorIDError, LineageQuery
 from lineage.tracker import LineageTracker
 
@@ -439,6 +440,76 @@ class TrackerQueryTests(unittest.TestCase):
             return
         self.assertEqual(event["query_id"], "q_by_id")
         self.assertEqual(event["vector_id"], "by_id_v")
+
+
+    def test_apply_idempotent_alters_propagates_non_duplicate_errors(self) -> None:
+        from lineage.models import _apply_idempotent_alters
+
+        class FakeConn:
+            def execute(self, sql: str) -> None:
+                raise sqlite3.OperationalError("database is locked")
+
+        with self.assertRaises(sqlite3.OperationalError):
+            _apply_idempotent_alters(FakeConn())  # type: ignore[arg-type]
+
+    def test_apply_idempotent_alters_swallows_duplicate_column(self) -> None:
+        from lineage.models import _apply_idempotent_alters
+
+        class FakeConn:
+            def execute(self, sql: str) -> None:
+                raise sqlite3.OperationalError("duplicate column name: source_url")
+
+        # Must NOT raise — that is the intended idempotent path.
+        _apply_idempotent_alters(FakeConn())  # type: ignore[arg-type]
+
+    def test_create_connection_sets_busy_timeout(self) -> None:
+        conn = create_connection(self.db_path)
+        try:
+            row = conn.execute("PRAGMA busy_timeout").fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(row)
+        if row is None:
+            return
+        self.assertEqual(int(row[0]), 30000)
+
+    def test_document_deep_link_fields_round_trip(self) -> None:
+        with LineageTracker(self.db_path, autoinit=True) as tracker:
+            tracker.start_pipeline("unit_test")
+            tracker.record_document(
+                doc_id="doc_dl",
+                source_path="s3://bucket/policy.pdf",
+                source_type="s3",
+                version="v1",
+                source_url="https://example.com/policy.pdf",
+                source_page=7,
+                source_section="3.2 Refunds",
+            )
+            tracker.record_chunk(
+                chunk_id="doc_dl:chunk:0",
+                document_id="doc_dl",
+                chunk_index=0,
+                strategy="semantic",
+                chunk_size=12,
+                text_preview="refund text",
+            )
+            tracker.record_vector(
+                vector_id="vec_dl",
+                collection_name="support_kb",
+                chunk_id="doc_dl:chunk:0",
+                embedding_model="m1",
+            )
+            tracker.complete_pipeline("success")
+
+        with LineageQuery(self.db_path) as query:
+            lineage = query.get_lineage("vec_dl", "support_kb")
+
+        self.assertIsNotNone(lineage)
+        if lineage is None:
+            return
+        self.assertEqual(lineage["document"]["source_url"], "https://example.com/policy.pdf")
+        self.assertEqual(lineage["document"]["source_page"], 7)
+        self.assertEqual(lineage["document"]["source_section"], "3.2 Refunds")
 
 
 if __name__ == "__main__":
