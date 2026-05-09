@@ -95,6 +95,33 @@ vectrace ask-trace \
 
 Use these when integrating with your existing retriever/serving pipeline.
 
+### Auto-record from a Qdrant search (`TrackedQdrant.search_with_tracking`)
+
+Skip the CLI for real RAG requests — wrap your Qdrant client and each search
+call records its own retrieval events:
+
+```python
+from connectors.qdrant import TrackedQdrant
+
+with TrackedQdrant(qdrant_url="http://localhost:6333", db_path="./vectrace.db") as rag:
+    hits, query_id = rag.search_with_tracking(
+        collection_name="support_kb",
+        query_text="Can I get a refund after 90 days?",
+        query_vector=embed("Can I get a refund after 90 days?"),
+        limit=3,
+        final_answer="Yes, refunds are allowed.",  # optional; can attach later
+    )
+    # ... pass `hits` to your LLM as usual
+
+# Then debug the answer the same way you would with the CLI:
+#   vectrace report-qa --db ./vectrace.db --collection support_kb \
+#     --question "Can I get a refund after 90 days?" --output ./trace.html
+```
+
+Lineage writes are best-effort: if SQLite fails, the search still returns and
+the failure is logged to stderr. The returned `query_id` lets you correlate
+later commands or attach a final answer to the same retrieval event group.
+
 ### Record real retrieval telemetry (`record-retrieval`)
 
 To attach exact retriever rank/score/vector IDs from your app:

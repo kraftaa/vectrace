@@ -39,11 +39,18 @@ def tokenize_support_text(text: str) -> set[str]:
     }
 
 
+_POLARITY_YES_RE = re.compile(r"^(yes|yeah|yep)\b", re.IGNORECASE)
+_POLARITY_NO_RE = re.compile(r"^(no|nope)\b", re.IGNORECASE)
+
+
 def answer_polarity(answer: str) -> str:
-    normalized = answer.strip().lower()
-    if normalized.startswith(("yes", "yeah", "yep")):
+    # Word-boundary match avoids false positives like "Nobody"/"Not"/"Normally"
+    # being classified as polarity "no", which can flip the day-constraint rule
+    # to "supported" when the answer actually expresses uncertainty.
+    normalized = answer.strip()
+    if _POLARITY_YES_RE.match(normalized):
         return "yes"
-    if normalized.startswith(("no", "nope")):
+    if _POLARITY_NO_RE.match(normalized):
         return "no"
     return "unknown"
 

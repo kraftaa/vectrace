@@ -41,6 +41,14 @@
       "final_answer": "The warranty lasts twelve months from purchase.",
       "evidence_text": "Our warranty covers products for twelve months from the date of purchase.",
       "expected_support_status": "supported"
+    },
+    {
+      "id": "polarity_word_boundary_nobody",
+      "description": "Answer beginning with 'Nobody' must not be misclassified as polarity 'no' — that would let the day-constraint rule flip this to 'supported' instead of falling through to overlap scoring.",
+      "query_text": "Can I get a refund after 90 days?",
+      "final_answer": "Nobody can confirm refunds outside the standard window.",
+      "evidence_text": "Refunds are only allowed within 30 days for eligible defects.",
+      "expected_support_status": "unclear"
     }
   ]
 }

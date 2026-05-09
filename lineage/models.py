@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,6 +55,12 @@ _DOCUMENT_DEEP_LINK_COLUMNS: tuple[tuple[str, str], ...] = (
     ("source_section", "TEXT"),
 )
 
+# Column identifiers cannot be parameterized in SQLite — they must be
+# interpolated into the SQL string. These guards keep that interpolation
+# safe even if someone later sources column definitions from config.
+_SAFE_IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+_ALLOWED_COLUMN_TYPES = frozenset({"TEXT", "INTEGER", "REAL", "BLOB", "NUMERIC"})
+
 
 def _apply_idempotent_alters(conn: sqlite3.Connection) -> None:
     """Add new optional columns to existing DBs.
@@ -64,6 +71,10 @@ def _apply_idempotent_alters(conn: sqlite3.Connection) -> None:
     failures must propagate so callers don't get a misleading success.
     """
     for column, column_type in _DOCUMENT_DEEP_LINK_COLUMNS:
+        if not _SAFE_IDENTIFIER_RE.match(column):
+            raise ValueError(f"Unsafe column identifier: {column!r}")
+        if column_type not in _ALLOWED_COLUMN_TYPES:
+            raise ValueError(f"Unsafe column type: {column_type!r}")
         try:
             conn.execute(f"ALTER TABLE documents ADD COLUMN {column} {column_type}")
         except sqlite3.OperationalError as exc:
